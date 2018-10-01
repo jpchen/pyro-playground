@@ -1,14 +1,3 @@
-#!/usr/bin/env python
-
-# Char RNN + independently sampled softmax alpha for each text chunk
-
-# Char RNN loosely based on
-# https://github.com/spro/practical-pytorch/blob/master/char-rnn-generation/char-rnn-generation.ipynb
-
-# TODO:
-# - use batches
-# - train on gpu
-
 import json
 import math
 import numpy as np
@@ -26,7 +15,6 @@ import torch.nn as nn
 
 from pprint import pprint
 from torch import Tensor
-from torch.autograd import Variable
 from torch.nn.functional import softmax, softplus
 
 from pyro import sample, observe, param
@@ -60,7 +48,7 @@ class DataSet(object):
         tensor = torch.zeros(len(string)).long()
         for c in range(len(string)):
             tensor[c] = self.all_chars.index(string[c])
-        return Variable(tensor)
+        return tensor
 
     def read(self):
         pass
@@ -133,7 +121,7 @@ class Noisy(DataSet):
 
     def flip(self, p):
         return random.random() <= p
-    
+
     def random_chunk(self, chunk_len=400):
         chunk = self.dataset.random_chunk(chunk_len=chunk_len)
         noise_prob = random.random() * self.max_noise
@@ -151,8 +139,8 @@ class Noisy(DataSet):
         self.text = self.dataset.text
         self.text_len = self.dataset.text_len
         self.test_prefixes = self.dataset.test_prefixes
-        self.all_chars = self.dataset.all_chars        
-    
+        self.all_chars = self.dataset.all_chars
+
     def char_tensor(self, string):
         return self.dataset.char_tensor(string)
 
@@ -188,7 +176,7 @@ class RNN(nn.Module):
         self.encoder = nn.Embedding(input_size, hidden_size)
         self.gru = nn.GRU(hidden_size, hidden_size, num_layers)
         self.decoder = nn.Linear(hidden_size, output_size)
-    
+
     def forward(self, input, hidden):
         input = self.encoder(input.view(1, -1))
         output, hidden = self.gru(input.view(1, 1, -1), hidden)
@@ -196,7 +184,7 @@ class RNN(nn.Module):
         return output, hidden
 
     def init_hidden(self):
-        return Variable(torch.zeros(self.num_layers, 1, self.hidden_size))
+        return torch.zeros(self.num_layers, 1, self.hidden_size)
 
 
 class CharRNN(nn.Module):
@@ -214,7 +202,7 @@ class CharRNN(nn.Module):
         hidden = self.rnn.init_hidden()
         out = self.char_tensor(prefix[0])
         generated_chars = prefix[0]
-        
+
         for i in range(1, len(prefix) + generate):
             out, hidden = self.rnn(out, hidden)
             ps = softmax(out.mul(alpha.expand(out.size())))
@@ -225,11 +213,11 @@ class CharRNN(nn.Module):
                 char = prefix[i]
                 if condition:
                     char_index = self.all_chars.index(char)
-                    observe(name, dist, Variable(Tensor([char_index])))
+                    observe(name, dist, Tensor([char_index]))
             else:
                 # Sample a character
                 char_index = sample(name, dist).data[0][0]  # FIXME
-                char = self.all_chars[char_index]            
+                char = self.all_chars[char_index]
             generated_chars += char
             out = self.char_tensor(char)
 
@@ -262,17 +250,17 @@ def main():
 
     def model(prefix, condition=False, generate=0, alpha=None):
         if alpha is None:
-            alpha = sample("alpha", Exponential(lam=Variable(Tensor([1]))))
+            alpha = sample("alpha", Exponential(lam=(Tensor([1]))))
         else:
-            alpha = Variable(Tensor([alpha]))
+            alpha = (Tensor([alpha]))
         return core(prefix, alpha, condition, generate)
-    
+
     def guide(prefix, condition=False, generate=0, alpha=None):
         if alpha is None:
-            alpha_point_estimate = softplus(param("alpha-point-estimate", Variable(torch.ones(1), requires_grad=True)))
+            alpha_point_estimate = softplus(param("alpha-point-estimate", (torch.ones(1), requires_grad=True)))
             alpha = sample("alpha", Delta(v=alpha_point_estimate))
         else:
-            alpha = Variable(Tensor([alpha]))
+            alpha = (Tensor([alpha]))
         return core(prefix, alpha, condition, generate)
 
     # Set up neural net parameter inference
@@ -300,10 +288,10 @@ def main():
             if diff < 0.05:
                 break
             prev_alpha_loss = alpha_loss
-        
+
         # Fit neural net params (and alpha)
         loss = -infer.step(chunk, condition=True)
-        
+
         # Update viz
         elbo_pane.update(loss)
         model_predictions = [model(prefix, generate=100, alpha=alpha) for prefix in dataset.test_prefixes for alpha in [1, 10, 100]]
